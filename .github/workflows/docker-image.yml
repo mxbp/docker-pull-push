@@ -1,0 +1,139 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  WORKSPACE: ${{ github.workspace }}
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    -
+      uses: actions/checkout@v3
+    -
+      name: Build the Docker image
+      run: docker build . --file Dockerfile --tag mxbp-test:$(date +%s)
+  pull:
+    runs-on: ubuntu-latest
+    environment: DEV
+    outputs:
+      output1: ${{ steps.step1.outputs.test }}
+      output2: ${{ steps.step2.outputs.test }}
+      git_sha_short: ${{ steps.identify.outputs.git_sha_short }}
+    steps:
+    -
+      id: step1
+      run: echo "test=${{ secrets.HUB_DOCKER_COM_USER }}" >> $GITHUB_OUTPUT
+    -
+      id: step2
+      run: |
+        echo "echo `${{ secrets.HUB_DOCKER_COM_PASS }} >> pass.txt`"
+        echo "test=`$(cat pass.txt)`" >> $GITHUB_OUTPUT
+    -
+      id: identify
+      run: |
+        export GIT_SHA="${{ github.sha }}"
+        export GIT_SHA_SHORT="${GIT_SHA:0:7}"
+        echo "::set-output name=git_sha_short::${GIT_SHA_SHORT}"
+    -
+      name: Secret to file
+      run: |
+        echo $DEV_ENV_FILE &gt;&gt; uset.txt
+        cat user.txt
+      shell: bash
+      env:
+        DEV_ENV_FILE: ${{ secrets.HUB_DOCKER_COM_USER }}
+    -
+      name: Upload a Build Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: DEV_ENV_FILE
+        path: user.txt
+    -
+      name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.HUB_DOCKER_COM_USER }}
+        password: ${{ secrets.HUB_DOCKER_COM_PASS }}
+    -
+      name: Pull docker image
+      run: docker pull maxim87b/check-corse:latest
+    -
+      name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    -
+      name: Save docker image
+      uses: docker/build-push-action@v3
+      with:
+        tags: maxim87b/check-corse:latest
+        outputs: type=docker,dest=/tmp/docker-image.tar
+    -
+      name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: docker-image
+        path: /tmp/docker-image.tar
+
+  pull-needs:
+    runs-on: ubuntu-latest
+    needs: pull
+    environment: PROD
+    steps:
+    -
+      name: Download artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: DEV_ENV_FILE
+        path: /tmp
+    -
+      run: |
+        cat /tmp/user.txt
+        echo "${{ needs.pull.outputs.git_sha_short }}"
+      shell: bash
+    -
+      name: Login to DockerHub from DEV environment
+      uses: docker/login-action@v2
+      with:
+        username: ${{ needs.pull.env.output1 }}
+        password: ${{ needs.pull.environment.output2 }}
+    -
+      name: Pull docker image
+      run: docker pull maxim87b/alpine:3.17
+
+  push:
+    runs-on: ubuntu-latest
+    needs: pull
+    environment: PROD
+    if: github.event_name != 'pull_request'
+    steps:
+    -
+      name: Login to GHCR
+      uses: docker/login-action@v2
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ github.token }}
+    -
+      name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    -
+      name: Download artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: docker-image
+        path: /tmp
+    -
+      name: Load Docker image
+      run: docker load --input /tmp/docker-image.tar
+    -
+      name: Change tag
+      run: docker tag maxim87b/check-corse:latest ghcr.io/${{ github.repository }}:latest
+    -
+      name: Push to GHCR
+      run: docker push ghcr.io/${{ github.repository }}:latest
