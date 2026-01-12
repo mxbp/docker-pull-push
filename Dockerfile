@@ -1,2 +1,2 @@
-FROM alpine:3.18.6
+FROM alpine:3.23.2
 RUN apk --no-cache update
